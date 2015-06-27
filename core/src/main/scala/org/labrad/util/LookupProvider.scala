@@ -1,8 +1,7 @@
 package org.labrad.util
 
-import org.labrad.Connection
+import org.labrad.{Connection, Constants}
 import org.labrad.data._
-import org.labrad.manager.Manager
 import scala.concurrent.{ExecutionContext, Future}
 
 class LookupProvider(send: Request => Future[Seq[Data]]) {
@@ -73,5 +72,5 @@ class LookupProvider(send: Request => Future[Seq[Data]]) {
     }
 
   private def doLookup(data: Data)(implicit ec: ExecutionContext): Future[Data] =
-    send(Request(Manager.ID, records = Seq(Record(Manager.LOOKUP, data)))).map(_(0))
+    send(Request(Constants.MANAGER_ID, records = Seq(Record(Constants.MANAGER_LOOKUP, data)))).map(_(0))
 }

@@ -1,5 +1,6 @@
 package org.labrad.manager
 
+import org.labrad.Constants
 import org.labrad.data._
 import org.labrad.util.Logging
 import scala.collection.mutable
@@ -49,7 +50,7 @@ class MessagerImpl(hub: Hub, tracker: StatsTracker) extends Messager with Loggin
       (target, ctx, id) <- listeners
     } {
       log.debug(s"named message recipient: target=${target}, ctx=${ctx}, id=${id}")
-      tracker.msgSend(Manager.ID)
+      tracker.msgSend(Constants.MANAGER_ID)
       hub.message(target, Packet(0, src, ctx, Seq(Record(id, data))))
     }
   }

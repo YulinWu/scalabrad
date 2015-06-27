@@ -11,7 +11,6 @@ import java.util.concurrent.atomic.AtomicInteger
 import org.labrad.data._
 import org.labrad.errors._
 import org.labrad.events.MessageListener
-import org.labrad.manager.Manager
 import org.labrad.util.{Counter, LookupProvider}
 import scala.concurrent.{Await, Channel, ExecutionContext, Future}
 import scala.concurrent.duration._
@@ -112,7 +111,7 @@ trait Connection {
   private def doLogin(password: Array[Char]): Unit = {
     try {
       // send first ping packet; response is password challenge
-      val Bytes(challenge) = Await.result(send(Request(Manager.ID)), 10.seconds)(0)
+      val Bytes(challenge) = Await.result(send(Request(Constants.MANAGER_ID)), 10.seconds)(0)
 
       val md = MessageDigest.getInstance("MD5")
       md.update(challenge)
@@ -121,14 +120,14 @@ trait Connection {
 
       // send password response; response is welcome message
       val Str(msg) = try {
-        Await.result(send(Request(Manager.ID, records = Seq(Record(0, data)))), 10.seconds)(0)
+        Await.result(send(Request(Constants.MANAGER_ID, records = Seq(Record(0, data)))), 10.seconds)(0)
       } catch {
         case e: ExecutionException => throw new IncorrectPasswordException
       }
       loginMessage = msg
 
       // send identification packet; response is our assigned connection id
-      val UInt(assignedId) = Await.result(send(Request(Manager.ID, records = Seq(Record(0, loginData)))), 10.seconds)(0)
+      val UInt(assignedId) = Await.result(send(Request(Constants.MANAGER_ID, records = Seq(Record(0, loginData)))), 10.seconds)(0)
       id = assignedId
 
     } catch {
