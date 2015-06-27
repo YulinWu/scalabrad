@@ -11,7 +11,7 @@ import java.security.{MessageDigest, SecureRandom}
 import java.nio.file.Files
 import org.clapper.argot._
 import org.clapper.argot.ArgotConverters._
-import org.labrad.TlsMode
+import org.labrad.{Constants, TlsMode}
 import org.labrad.annotations._
 import org.labrad.crypto.Certs
 import org.labrad.data._
@@ -56,7 +56,7 @@ class CentralNode(
   val auth: AuthService = new AuthServiceImpl(password)
 
   // Manager gets id 1L
-  tracker.connectServer(Manager.ID, Manager.NAME)
+  tracker.connectServer(Constants.MANAGER_ID, Manager.NAME)
 
   for (store <- storeOpt) {
     // Registry gets id 2L
@@ -76,14 +76,8 @@ class CentralNode(
 
 
 object Manager extends Logging {
-  val ID = 1L
   val NAME = "Manager"
   val DOC = "Provides basic support for all labrad connections, including discovery of other servers and lookup of metadata about them."
-
-  // setting ids
-  val SERVERS = 1L
-  val SETTINGS = 2L
-  val LOOKUP = 3L
 
   // first client id
   val ClientIdStart = 1000000000L

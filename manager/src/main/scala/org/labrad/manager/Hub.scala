@@ -1,6 +1,6 @@
 package org.labrad.manager
 
-import org.labrad.ServerInfo
+import org.labrad.{Constants, ServerInfo}
 import org.labrad.annotations._
 import org.labrad.data._
 import org.labrad.errors._
@@ -92,7 +92,7 @@ class HubImpl(tracker: StatsTracker, _messager: () => Messager) extends Hub with
       tracker.connectServer(id, name)
       nServersConnected += 1
     }
-    messager.broadcast(Manager.Connect(id, name, isServer = true), sourceId = Manager.ID)
+    messager.broadcast(Manager.Connect(id, name, isServer = true), sourceId = Constants.MANAGER_ID)
   }
 
   def connectClient(id: Long, name: String, handler: ClientActor): Unit = {
@@ -104,7 +104,7 @@ class HubImpl(tracker: StatsTracker, _messager: () => Messager) extends Hub with
       tracker.connectClient(id, name)
       nClientsConnected += 1
     }
-    messager.broadcast(Manager.Connect(id, name, isServer = false), sourceId = Manager.ID)
+    messager.broadcast(Manager.Connect(id, name, isServer = false), sourceId = Constants.MANAGER_ID)
   }
 
   def close(id: Long): Unit = {
@@ -154,16 +154,16 @@ class HubImpl(tracker: StatsTracker, _messager: () => Messager) extends Hub with
     }
 
     // send expiration messages to all remaining servers (asynchronously)
-    messager.broadcast(Manager.ExpireAll(id), sourceId = Manager.ID)
+    messager.broadcast(Manager.ExpireAll(id), sourceId = Constants.MANAGER_ID)
     Future.sequence(allServers.map(_.expireAll(id)(10.seconds))) onFailure {
       case ex => //log.warn("error while sending context expiration messages", ex)
     }
 
     // send server disconnect message
     if (isServer) {
-      messager.broadcast(Manager.DisconnectServer(id, name), sourceId = Manager.ID)
+      messager.broadcast(Manager.DisconnectServer(id, name), sourceId = Constants.MANAGER_ID)
     }
-    messager.broadcast(Manager.Disconnect(id, name, isServer = true), sourceId = Manager.ID)
+    messager.broadcast(Manager.Disconnect(id, name, isServer = true), sourceId = Constants.MANAGER_ID)
   }
 
   def message(id: Long, packet: Packet): Unit = {

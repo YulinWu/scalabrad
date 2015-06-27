@@ -7,7 +7,7 @@ import org.labrad.util.Logging
 import org.scalatest.concurrent.AsyncAssertions
 import org.scalatest.fixture.FunSuite
 import scala.collection._
-import scala.concurrent.{Await, Future, Promise}
+import scala.concurrent.Await
 import scala.concurrent.duration._
 import scala.reflect.runtime.universe
 

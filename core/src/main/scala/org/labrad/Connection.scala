@@ -17,7 +17,6 @@ import java.util.concurrent.atomic.AtomicInteger
 import org.labrad.data._
 import org.labrad.errors._
 import org.labrad.events.MessageListener
-import org.labrad.manager.Manager
 import org.labrad.util.{Counter, LookupProvider}
 import org.labrad.util.Futures._
 import org.labrad.util.Paths._
@@ -166,7 +165,7 @@ trait Connection {
       }
 
       if (useStartTls) {
-        val startTls = Request(Manager.ID, records = Seq(Record(1, Cluster(Str("STARTTLS"), Str(host)))))
+        val startTls = Request(Constants.MANAGER_ID, records = Seq(Record(1, Cluster(Str("STARTTLS"), Str(host)))))
         val Str(cert) = Await.result(send(startTls), 10.seconds)(0)
 
         var handler = makeSslContext(host).newHandler(channel.alloc(), host, port)
@@ -185,7 +184,7 @@ trait Connection {
   private def doLogin(password: Array[Char]): Unit = {
     try {
       // send first ping packet; response is password challenge
-      val Bytes(challenge) = Await.result(send(Request(Manager.ID)), 10.seconds)(0)
+      val Bytes(challenge) = Await.result(send(Request(Constants.MANAGER_ID)), 10.seconds)(0)
 
       val md = MessageDigest.getInstance("MD5")
       md.update(challenge)
@@ -194,14 +193,14 @@ trait Connection {
 
       // send password response; response is welcome message
       val Str(msg) = try {
-        Await.result(send(Request(Manager.ID, records = Seq(Record(0, data)))), 10.seconds)(0)
+        Await.result(send(Request(Constants.MANAGER_ID, records = Seq(Record(0, data)))), 10.seconds)(0)
       } catch {
         case e: ExecutionException => throw new IncorrectPasswordException
       }
       loginMessage = msg
 
       // send identification packet; response is our assigned connection id
-      val UInt(assignedId) = Await.result(send(Request(Manager.ID, records = Seq(Record(0, loginData)))), 10.seconds)(0)
+      val UInt(assignedId) = Await.result(send(Request(Constants.MANAGER_ID, records = Seq(Record(0, loginData)))), 10.seconds)(0)
       id = assignedId
 
     } catch {

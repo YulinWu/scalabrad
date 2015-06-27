@@ -2,7 +2,7 @@ package org.labrad.manager
 
 import io.netty.channel._
 import java.io.IOException
-import org.labrad.{ Reflect, RequestContext, Server, ServerInfo, SettingInfo, TypeInfo }
+import org.labrad.{ Constants, Reflect, RequestContext, Server, ServerInfo, SettingInfo, TypeInfo }
 import org.labrad.annotations._
 import org.labrad.data._
 import org.labrad.errors._
@@ -102,14 +102,14 @@ extends SimpleChannelInboundHandler[Packet] with ClientActor with ManagerSupport
   private val mgrLock = new Object
 
   private def handleManagerRequest(packet: Packet): Future[Packet] = {
-    tracker.serverReq(Manager.ID)
+    tracker.serverReq(Constants.MANAGER_ID)
     // use a lock to ensure that we process manager requests sequentially
     val response = mgrLock.synchronized {
       Server.handle(packet, includeStackTrace = false) { req =>
         mgrHandler(req)
       }
     }
-    tracker.serverRep(Manager.ID)
+    tracker.serverRep(Constants.MANAGER_ID)
     Future.successful(response)
   }
 
@@ -288,7 +288,7 @@ trait ManagerSupport {
  */
 class ManagerImpl(id: Long, name: String, hub: Hub, stub: ManagerSupport, tracker: StatsTracker, messager: Messager) {
   private def serverInfo(id: Either[Long, String]): ServerInfo = id match {
-    case Left(Manager.ID) | Right(Manager.NAME) => ManagerImpl.info
+    case Left(Constants.MANAGER_ID) | Right(Manager.NAME) => ManagerImpl.info
     case _ =>
       hub.serverInfo(id).getOrElse(sys.error("Server not found: " + id.fold(_.toString, _.toString)))
   }
@@ -297,7 +297,7 @@ class ManagerImpl(id: Long, name: String, hub: Hub, stub: ManagerSupport, tracke
 
   @Setting(id=1, name="Servers", doc="Get a list of ids and names for all currently-connected servers.")
   def servers(): Seq[(Long, String)] =
-    (Manager.ID, Manager.NAME) +: hub.serversInfo.map(s => (s.id, s.name)).sorted
+    (Constants.MANAGER_ID, Manager.NAME) +: hub.serversInfo.map(s => (s.id, s.name)).sorted
 
   @Setting(id=2, name="Settings", doc="Get a list of ids and names of settings for the given server, specified by name or id.")
   def settings(serverId: Either[Long, String]): Seq[(Long, String)] =
@@ -378,7 +378,7 @@ class ManagerImpl(id: Long, name: String, hub: Hub, stub: ManagerSupport, tracke
     // for compatibility with delphi manager, we send a cluster of
     // id and message data as the message itself, and set the source
     // to alway be the manager
-    messager.broadcast(name, Cluster(UInt(id), message), sourceId = Manager.ID)
+    messager.broadcast(name, Cluster(UInt(id), message), sourceId = Constants.MANAGER_ID)
   }
 
   // server settings (should stay local)
@@ -404,7 +404,7 @@ class ManagerImpl(id: Long, name: String, hub: Hub, stub: ManagerSupport, tracke
   @Setting(id=120, name="S: Start Serving", doc="(Servers only) Signal that the server is ready to receive requests. Before this point, the server will not appear in the list of active servers nor any metadata lookups.")
   def startServing(): Unit = {
     stub.startServing
-    messager.broadcast(Manager.ConnectServer(id, name), sourceId = Manager.ID)
+    messager.broadcast(Manager.ConnectServer(id, name), sourceId = Constants.MANAGER_ID)
   }
 
   // utility methods (should stay local)
@@ -423,9 +423,9 @@ class ManagerImpl(id: Long, name: String, hub: Hub, stub: ManagerSupport, tracke
 
   @Setting(id=10000, name="Connection Info", doc="Get information about connected servers and clients.")
   def connectionInfo(): Seq[(Long, String, Boolean, Long, Long, Long, Long, Long, Long)] = {
-    val serverIds = (Manager.ID +: hub.serversInfo.map(_.id)).toSet
+    val serverIds = (Constants.MANAGER_ID +: hub.serversInfo.map(_.id)).toSet
     for (s <- tracker.stats if !s.isServer || serverIds(s.id)) yield {
-      val sReqs = s.sReqs - (if (s.id == Manager.ID) 1 else 0) // don't count this request for Manager
+      val sReqs = s.sReqs - (if (s.id == Constants.MANAGER_ID) 1 else 0) // don't count this request for Manager
       val cReqs = s.cReqs - (if (s.id == id) 1 else 0) // don't count this request for client
       (s.id, s.name, s.isServer, sReqs, s.sReps, cReqs, s.cReps, s.msgSent, s.msgRecd)
     }
@@ -443,5 +443,5 @@ class ManagerImpl(id: Long, name: String, hub: Hub, stub: ManagerSupport, tracke
 
 object ManagerImpl {
   val (settings, bind) = Reflect.makeHandler[ManagerImpl]
-  lazy val info = ServerInfo(Manager.ID, Manager.NAME, Manager.DOC, settings)
+  lazy val info = ServerInfo(Constants.MANAGER_ID, Manager.NAME, Manager.DOC, settings)
 }

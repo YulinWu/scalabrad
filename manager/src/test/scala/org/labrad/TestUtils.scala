@@ -3,14 +3,10 @@ package org.labrad
 import io.netty.handler.ssl.SslContextBuilder
 import io.netty.handler.ssl.util.SelfSignedCertificate
 import java.io.File
-import java.nio.ByteOrder
-import java.util.Date
 import org.labrad.data._
 import org.labrad.manager.{CentralNode, TlsHostConfig, TlsPolicy}
 import org.labrad.registry._
 import org.labrad.types._
-import org.labrad.util.{Logging, Util}
-import org.scalatest.FunSuite
 import scala.concurrent.{Await, Future}
 import scala.concurrent.duration._
 import scala.util.Random
