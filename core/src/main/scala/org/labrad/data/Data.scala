@@ -179,6 +179,7 @@ trait Data {
   def arraySize: Int
   def arrayShape: Array[Int]
 
+
   def setArrayShape(shape: Array[Int]): Unit
   def setArrayShape(shape: Int*): Unit = setArrayShape(shape.toArray)
   def setArraySize(size: Int): Unit = setArrayShape(size)
@@ -1523,5 +1524,3 @@ object Translate {
     buf.result
   }
 }
-
-

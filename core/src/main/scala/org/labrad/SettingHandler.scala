@@ -32,7 +32,7 @@ case class ServerInfo(id: Long, name: String, doc: String, settings: Seq[Setting
   def setting(name: String): Option[SettingInfo] = settings.find(_.name == name)
 }
 
-case class Handler(f: PartialFunction[Data, Data], accepts: Pattern = Pattern("?"), returns: Pattern = Pattern("?"))
+//case class Handler(f: PartialFunction[Data, Data], accepts: Pattern = Pattern("?"), returns: Pattern = Pattern("?"))
 
 object SettingHandler extends Logging {
   // TODO handle annotated types such as units

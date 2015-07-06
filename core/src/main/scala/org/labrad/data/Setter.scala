@@ -30,7 +30,13 @@ object Setter {
   implicit def valueSetter = new Setter[Double] {
     def set(data: Data, value: Double) { data.setValue(value) }
   }
+  def valueSetter(unit: String) = new Setter[Double] {
+    def set(data: Data, value: Double) { data.setValue(value) }
+  }
   implicit def complexSetter = new Setter[Complex] {
+    def set(data: Data, value: Complex) { data.setComplex(value) }
+  }
+  def complexSetter(unit: String) = new Setter[Complex] {
     def set(data: Data, value: Complex) { data.setComplex(value) }
   }
 
