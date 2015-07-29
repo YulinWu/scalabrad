@@ -1,10 +1,12 @@
 package org.labrad
 
+import io.netty.handler.ssl.SslContextBuilder
+import io.netty.handler.ssl.util.SelfSignedCertificate
 import java.io.File
 import java.nio.ByteOrder
 import java.util.Date
 import org.labrad.data._
-import org.labrad.manager.CentralNode
+import org.labrad.manager.{CentralNode, TlsHostConfig}
 import org.labrad.registry._
 import org.labrad.types._
 import org.labrad.util.{Logging, Util}
@@ -17,18 +19,23 @@ object TestUtils extends {
 
   def await[A](future: Future[A]): A = Await.result(future, 30.seconds)
 
-  def withManager[T](f: (String, Int, Array[Char]) => T): T = {
+  def withManager[T](f: (String, Int, Int, Array[Char]) => T): T = {
     val host = "localhost"
     val port = 10000 + Random.nextInt(50000) //Util.findAvailablePort()
+    val tlsPort = 10000 + Random.nextInt(50000)
     val password = "testPassword12345!@#$%".toCharArray
 
     val registryFile = File.createTempFile("labrad-registry", "")
 
     val registryStore = SQLiteStore(registryFile)
 
-    val manager = new CentralNode(port, password, Some(registryStore))
+    val ssc = new SelfSignedCertificate()
+    val sslCtx = SslContextBuilder.forServer(ssc.certificate, ssc.privateKey).build()
+    val config = TlsHostConfig((ssc.certificate, sslCtx))
+
+    val manager = new CentralNode(port, tlsPort, password, Some(registryStore), config)
     try {
-      f(host, port, password)
+      f(host, port, tlsPort, password)
     } finally {
       manager.stop()
     }

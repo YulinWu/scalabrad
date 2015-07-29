@@ -13,7 +13,7 @@ class ManagerTest extends FunSuite with AsyncAssertions {
   def mgr(c: Client) = new ManagerServerProxy(c)
 
   test("manager returns lists of servers and settings") {
-    withManager { (host, port, password) =>
+    withManager { (host, port, tlsPort, password) =>
       withClient(host, port, password) { c =>
         val servers = await(mgr(c).servers)
         assert(servers.size == 2)
@@ -29,7 +29,7 @@ class ManagerTest extends FunSuite with AsyncAssertions {
   }
 
   test("manager uses same id when a server reconnects") {
-    withManager { (host, port, password) =>
+    withManager { (host, port, tlsPort, password) =>
       withClient(host, port, password) { c =>
         val id = withServer(host, port, password) { s =>
           await(mgr(c).lookupServer("Scala Test Server"))
@@ -46,7 +46,7 @@ class ManagerTest extends FunSuite with AsyncAssertions {
   }
 
   test("manager sends message when server connects and disconnects") {
-    withManager { (host, port, password) =>
+    withManager { (host, port, tlsPort, password) =>
       withClient(host, port, password) { c =>
 
         val connectWaiter = new Waiter
@@ -80,7 +80,7 @@ class ManagerTest extends FunSuite with AsyncAssertions {
   }
 
   test("manager sends named messages when contexts expire") {
-    withManager { (host, port, password) =>
+    withManager { (host, port, tlsPort, password) =>
       val expireAllWaiter = new Waiter
       val expireContextWaiter = new Waiter
 

@@ -89,7 +89,7 @@ class RegistryTest extends FunSuite with Matchers with AsyncAssertions {
   }
 
   test("registry can store and retrieve arbitrary data") {
-    withManager { (host, port, password) =>
+    withManager { (host, port, tlsPort, password) =>
       withClient(host, port, password) { c =>
         await(c.send("Registry", "mkdir" -> Str("test"), "cd" -> Str("test")))
         try {
@@ -109,7 +109,7 @@ class RegistryTest extends FunSuite with Matchers with AsyncAssertions {
   }
 
   test("registry can deal with unicode and strange characters in directory names", Tag("chars")) {
-    withManager { (host, port, password) =>
+    withManager { (host, port, tlsPort, password) =>
       withClient(host, port, password) { c =>
         val dir = "<\u03C0|\u03C1>??+*\\/:|"
         await(c.send("Registry", "mkdir" -> Str(dir)))
@@ -121,7 +121,7 @@ class RegistryTest extends FunSuite with Matchers with AsyncAssertions {
   }
 
   test("registry can deal with unicode and strange characters in key names", Tag("chars")) {
-    withManager { (host, port, password) =>
+    withManager { (host, port, tlsPort, password) =>
       withClient(host, port, password) { c =>
         val key = "<\u03C0|\u03C1>??+*\\/:|"
         val data = Str("Hello!")
@@ -135,7 +135,7 @@ class RegistryTest extends FunSuite with Matchers with AsyncAssertions {
   }
 
   test("registry cd with no arguments stays in same directory") {
-    withManager { (host, port, password) =>
+    withManager { (host, port, tlsPort, password) =>
       withClient(host, port, password) { c =>
         await(c.send("Registry", "cd" -> Cluster(Arr(Str("test"), Str("a")), Bool(true))))
         val result = await(c.send("Registry", "cd" -> Data.NONE))(0)
@@ -145,7 +145,7 @@ class RegistryTest extends FunSuite with Matchers with AsyncAssertions {
   }
 
   test("registry sends message when key is created") {
-    withManager { (host, port, password) =>
+    withManager { (host, port, tlsPort, password) =>
       withClient(host, port, password) { c =>
 
         val w = new Waiter
@@ -167,7 +167,7 @@ class RegistryTest extends FunSuite with Matchers with AsyncAssertions {
   }
 
   test("registry sends message when key is changed") {
-    withManager { (host, port, password) =>
+    withManager { (host, port, tlsPort, password) =>
       withClient(host, port, password) { c =>
 
         val w = new Waiter
@@ -190,7 +190,7 @@ class RegistryTest extends FunSuite with Matchers with AsyncAssertions {
   }
 
   test("registry sends message when key is deleted") {
-    withManager { (host, port, password) =>
+    withManager { (host, port, tlsPort, password) =>
       withClient(host, port, password) { c =>
 
         val w = new Waiter
@@ -213,7 +213,7 @@ class RegistryTest extends FunSuite with Matchers with AsyncAssertions {
   }
 
   test("deleting a registry directory containing a dir should fail") {
-    withManager { (host, port, password) =>
+    withManager { (host, port, tlsPort, password) =>
       withClient(host, port, password) { c =>
 
         val reg = new RegistryServerProxy(c)
@@ -238,7 +238,7 @@ class RegistryTest extends FunSuite with Matchers with AsyncAssertions {
   }
 
   test("deleting a registry directory containing a key should fail") {
-    withManager { (host, port, password) =>
+    withManager { (host, port, tlsPort, password) =>
       withClient(host, port, password) { c =>
 
         val reg = new RegistryServerProxy(c)
@@ -303,5 +303,44 @@ object RegistryTest {
       }
       mkdir()
     }
+  }
+}
+
+object PopulateRegistry {
+  def main(args: Array[String]): Unit = {
+    val cxn = new Client()
+    cxn.connect()
+    val reg = new RegistryServerProxy(cxn)
+    val fs = Seq.newBuilder[Future[Unit]]
+
+    @scala.annotation.tailrec
+    def randomData(): Data = {
+      val x = Hydrant.randomData()
+      if (x.isNone) randomData() else x
+    }
+
+    def makeDir(path: Seq[String], level: Int): Unit = {
+      if (level > 0) {
+        println(path)
+        for (i <- 1 to 10) {
+          makeDir(path :+ s"dir$i", level - 1)
+        }
+        val p = reg.packet()
+        p.cd(path, create = true)
+        for (i <- 1 to 100) {
+          p.set(s"key$i", randomData())
+        }
+        fs += p.send()
+        //Await.result(p.send(), 10.seconds)
+      }
+    }
+
+    makeDir(Seq("", "blah7"), 3)
+
+    for (f <- fs.result) {
+      Await.result(f, 10.seconds)
+    }
+
+    cxn.close()
   }
 }

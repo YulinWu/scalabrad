@@ -6,7 +6,8 @@ class Client(
   val name: String = "Scala Client",
   val host: String = sys.env.getOrElse("LABRADHOST", ""),
   val port: Int = sys.env.getOrElse("LABRADPORT", "7682").toInt,
-  val password: Array[Char] = sys.env.getOrElse("LABRADPASSWORD", "").toCharArray
+  val password: Array[Char] = sys.env.getOrElse("LABRADPASSWORD", "").toCharArray,
+  val useTls: Boolean = false
 ) extends Connection {
   protected def loginData = Cluster(UInt(Client.PROTOCOL_VERSION), Str(name))
 }

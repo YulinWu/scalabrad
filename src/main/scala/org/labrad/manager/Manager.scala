@@ -1,15 +1,20 @@
 package org.labrad.manager
 
+import io.netty.handler.ssl.{SslContext, SslContextBuilder}
+import io.netty.handler.ssl.util.SelfSignedCertificate
+import io.netty.util.DomainNameMapping
 import java.io.File
 import java.net.URI
 import java.nio.CharBuffer
 import java.nio.charset.StandardCharsets.UTF_8
 import java.security.MessageDigest
+import java.nio.file.Files
 import org.labrad.annotations._
 import org.labrad.data._
 import org.labrad.errors._
 import org.labrad.registry._
 import org.labrad.util._
+import org.labrad.util.Paths._
 import scala.annotation.tailrec
 import scala.concurrent.Await
 import scala.concurrent.ExecutionContext.Implicits.global
@@ -33,7 +38,7 @@ class AuthServiceImpl(password: Array[Char]) extends AuthService {
 }
 
 
-class CentralNode(port: Int, password: Array[Char], storeOpt: Option[RegistryStore]) extends Logging {
+class CentralNode(port: Int, tlsPort: Int, password: Array[Char], storeOpt: Option[RegistryStore], tlsConfig: TlsHostConfig, requireStartTls: Boolean) extends Logging {
   // start services
   val tracker = new StatsTrackerImpl
   val hub: Hub = new HubImpl(tracker, () => messager)
@@ -52,7 +57,7 @@ class CentralNode(port: Int, password: Array[Char], storeOpt: Option[RegistrySto
   }
 
   // start listening for incoming network connections
-  val listener = new Listener(auth, hub, tracker, messager, port)
+  val listener = new Listener(auth, hub, tracker, messager, port, tlsPort, tlsConfig, requireStartTls)
 
   def stop() {
     listener.stop()
@@ -104,23 +109,18 @@ object Manager extends Logging {
     def msgData: Data = ctx.toData
   }
 
-  // helpers for dealing with paths
-  implicit class PathString(path: String) {
-    def / (file: String): File = new File(path, file)
-  }
-
-  implicit class PathFile(path: File) {
-    def / (file: String): File = new File(path, file)
-  }
-
   def main(args: Array[String]) {
-    val options = Util.parseArgs(args, Seq("port", "password", "registry"))
+    val options = Util.parseArgs(args, Seq("port", "password", "registry", "tls-required", "tls-port", "tls-hosts"))
 
     val port = options.get("port").orElse(sys.env.get("LABRADPORT")).map(_.toInt).getOrElse(7682)
+    val tlsPort = options.get("tls-port").orElse(sys.env.get("LABRAD_TLS_PORT")).map(_.toInt).getOrElse(7643)
+
     val password = options.get("password").orElse(sys.env.get("LABRADPASSWORD")).getOrElse("").toCharArray
     val registryUri = options.get("registry").orElse(sys.env.get("LABRADREGISTRY")).map(new URI(_)).getOrElse {
       (sys.props("user.home") / ".labrad" / "registry.sqlite").toURI
     }
+    val requireTls = options.get("tls-required").map(Util.parseBooleanOpt).getOrElse(true)
+    val tlsConfig = parseTlsHostsConfig(options.get("tls-hosts").orElse(sys.env.get("LABRAD_TLS_HOSTS")).getOrElse(""))
 
     val storeOpt = registryUri.getScheme match {
       case null if registryUri == new URI("none") =>
@@ -129,13 +129,6 @@ object Manager extends Logging {
 
       case "file" =>
         val registry = new File(Util.bareUri(registryUri)).getAbsoluteFile
-
-        def ensureDir(dir: File): Unit = {
-          if (!dir.exists) {
-            val ok = dir.mkdirs()
-            if (!ok) sys.error(s"failed to create registry directory: $dir")
-          }
-        }
 
         val (store, format) = if (registry.isDirectory) {
           ensureDir(registry)
@@ -175,7 +168,7 @@ object Manager extends Logging {
         sys.error(s"unknown scheme for registry uri: $scheme. must use 'file', 'labrad'")
     }
 
-    val centralNode = new CentralNode(port, password, storeOpt)
+    val centralNode = new CentralNode(port, tlsPort, password, storeOpt, tlsConfig, requireTls)
 
     // Optionally wait for EOF to stop the manager.
     // This is a convenience feature when developing in sbt, allowing the
@@ -191,6 +184,112 @@ object Manager extends Logging {
       sys.addShutdownHook {
         centralNode.stop()
       }
+    }
+  }
+
+  /**
+   * Parse a string representing the tls host configuration.
+   *
+   * The config is a semicolon-separated list of hosts, where for each host we have either just
+   * <hostname> (in which case we will use self-signed certificates for that host), or else
+   * <hostname>?cert=<cert-file>&key=<key-file>[&intermediates=<intermediates-file>].
+   *
+   * For example, if we had the string:
+   *
+   * public.com?cert=/etc/ssl/certs/public.crt?key=/etc/ssl/private/public.key;private;private2
+   *
+   * Then we would configure TLS to use the given certificates in /etc/ssl for connections made
+   * to the hostname public.com, and our own self-signed certs for connections made to hostnames
+   * private and private2.
+   */
+  def parseTlsHostsConfig(hostsConfig: String): TlsHostConfig = {
+    val hosts = if (hostsConfig == "") Seq() else hostsConfig.split(";").toSeq.map(parseTlsHost)
+    TlsHostConfig(sslContextForHost("localhost"), hosts: _*)
+  }
+
+  /**
+   * Parse hostname config for a single TLS host.
+   */
+  def parseTlsHost(hostConfig: String): (String, (File, SslContext)) = {
+    require(hostConfig != "")
+
+    hostConfig.split('?') match {
+      case Array(host) =>
+        host -> sslContextForHost(host)
+
+      case Array(host, paramStr) =>
+        val params = paramStr.split('&').map { param =>
+          param.split('=') match { case Array(k, v) => k -> v }
+        }.toMap
+
+        val unknownParams = params.keys.toSet -- Set("cert", "intermediates", "key")
+        require(unknownParams.isEmpty, s"unknown parameters for host $host: ${unknownParams.mkString(", ")}")
+
+        val certFileAndSslCtx = (params.get("cert"), params.get("intermediates"), params.get("key")) match {
+          case (Some(cert), None, Some(key)) =>
+            val certFile = new File(cert)
+            val sslCtx = SslContextBuilder.forServer(certFile, new File(key)).build()
+            (certFile, sslCtx)
+
+          case (Some(cert), Some(interm), Some(key)) =>
+            // concatenate the files containing our server certificate and intermediate certs
+            val certFile = File.createTempFile("labrad-manager", "cert")
+            Files.write(certFile.toPath,
+              Files.readAllBytes(new File(cert).toPath) ++ Files.readAllBytes(new File(interm).toPath))
+            certFile.deleteOnExit()
+            val sslCtx = SslContextBuilder.forServer(certFile, new File(key)).build()
+            (certFile, sslCtx)
+
+          case (None, None, None) =>
+            sslContextForHost(host)
+
+          case _ =>
+            sys.error(s"must specify both tls-cert-file and tls-key-file")
+        }
+
+        host -> certFileAndSslCtx
+    }
+  }
+
+  /**
+   * Create an SSL/TLS context for the given host, using self-signed certificates.
+   */
+  private def sslContextForHost(host: String): (File, SslContext) = {
+    val certFile = sys.props("user.home") / ".labrad" / "manager" / "certs"/ s"${host}.cert"
+    val keyFile = sys.props("user.home") / ".labrad" / "manager" / "keys" / s"${host}.key"
+
+    if (!certFile.exists() || !keyFile.exists()) {
+      // if one exists but not the other, we have a problem
+      require(!certFile.exists(), s"found cert file $certFile but no matching key file $keyFile")
+      require(!keyFile.exists(), s"found key file $keyFile but no matching cert file $certFile")
+
+      log.info(s"Generating self-signed certificate for host '$host'. certFile=$certFile, keyFile=$keyFile")
+      val ssc = new SelfSignedCertificate(host)
+      copy(ssc.certificate, certFile)
+      copy(ssc.privateKey, keyFile)
+    } else {
+      log.info(s"Using saved certificate for host '$host'. certFile=$certFile, keyFile=$keyFile")
+    }
+
+    (certFile, SslContextBuilder.forServer(certFile, keyFile).build())
+  }
+
+  /**
+   * Copy the given source file to the specified destination, creating
+   * destination directories as needed.
+   */
+  private def copy(src: File, dst: File): Unit = {
+    ensureDir(dst.getParentFile)
+    Files.copy(src.toPath, dst.toPath)
+  }
+
+  /**
+   * Create directories as needed to ensure that the specified location exists.
+   */
+  private def ensureDir(dir: File): Unit = {
+    if (!dir.exists) {
+      val ok = dir.mkdirs()
+      if (!ok) sys.error(s"failed to create registry directory: $dir")
     }
   }
 }

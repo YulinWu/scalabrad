@@ -56,7 +56,7 @@ object Migrate {
         println(e.message)
         return
       case e: Exception =>
-        println(s"enexpected error: $e")
+        println(s"unexpected error: $e")
         return
     }
 

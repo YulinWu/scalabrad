@@ -5,10 +5,12 @@ import io.netty.channel.{Channel, ChannelHandlerContext, ChannelOption, ChannelI
 import io.netty.channel.nio.NioEventLoopGroup
 import io.netty.channel.socket.SocketChannel
 import io.netty.channel.socket.nio.NioSocketChannel
-import java.io.IOException
-import java.nio.ByteOrder
-import java.nio.CharBuffer
+import io.netty.handler.ssl.{SslContext, SslContextBuilder}
+import java.io.{File, IOException}
+import java.net.{InetAddress, InetSocketAddress}
+import java.nio.{ByteOrder, CharBuffer}
 import java.nio.charset.StandardCharsets.UTF_8
+import java.nio.file.Files
 import java.security.MessageDigest
 import java.util.concurrent.{ExecutionException, Executors, TimeUnit}
 import java.util.concurrent.atomic.AtomicInteger
@@ -17,14 +19,18 @@ import org.labrad.errors._
 import org.labrad.events.MessageListener
 import org.labrad.manager.Manager
 import org.labrad.util.{Counter, LookupProvider}
+import org.labrad.util.Futures._
+import org.labrad.util.Paths._
 import scala.concurrent.{Await, ExecutionContext, Future}
 import scala.concurrent.duration._
+
 
 trait Connection {
 
   val name: String
   val host: String
   val port: Int
+  val useTls: Boolean
   def password: Array[Char]
 
   var id: Long = _
@@ -64,6 +70,18 @@ trait Connection {
 
   private var channel: Channel = _
 
+  private def certsDirectory = sys.props("user.home") / ".labrad" / "client" / "certs"
+  private def certFile(hostname: String): File = certsDirectory / s"${hostname}.cert"
+
+  private def makeSslContext(hostname: String): SslContext = {
+    val sslContextBuilder = SslContextBuilder.forClient()
+    val file = certFile(hostname)
+    if (file.exists) {
+      sslContextBuilder.trustManager(file)
+    }
+    sslContextBuilder.build()
+  }
+
   def connect(): Unit = {
     val b = new Bootstrap()
     b.group(workerGroup)
@@ -71,25 +89,42 @@ trait Connection {
      .option[java.lang.Boolean](ChannelOption.TCP_NODELAY, true)
      .option[java.lang.Boolean](ChannelOption.SO_KEEPALIVE, true)
      .handler(new ChannelInitializer[SocketChannel] {
-         override def initChannel(ch: SocketChannel): Unit = {
-           val p = ch.pipeline
-           p.addLast("packetCodec", new PacketCodec(forceByteOrder = ByteOrder.BIG_ENDIAN))
-           p.addLast("packetHandler", new SimpleChannelInboundHandler[Packet] {
-             override protected def channelRead0(ctx: ChannelHandlerContext, packet: Packet): Unit = {
-               handlePacket(packet)
-             }
-
-             override def exceptionCaught(ctx: ChannelHandlerContext, cause: Throwable): Unit = {
-               closeNoWait(cause)
-             }
-           })
-         }
+        override def initChannel(ch: SocketChannel): Unit = {
+          val p = ch.pipeline
+          if (useTls) {
+            p.addLast("sslContext", makeSslContext(host).newHandler(ch.alloc(), host, port))
+          }
+          p.addLast("packetCodec", new PacketCodec(forceByteOrder = ByteOrder.BIG_ENDIAN))
+          p.addLast("packetHandler", new SimpleChannelInboundHandler[Packet] {
+            override protected def channelRead0(ctx: ChannelHandlerContext, packet: Packet): Unit = {
+              handlePacket(packet)
+            }
+            override def exceptionCaught(ctx: ChannelHandlerContext, cause: Throwable): Unit = {
+              closeNoWait(cause)
+            }
+          })
+        }
      })
 
     channel = b.connect(host, port).sync().channel
 
     connected = true
+
     try {
+      val localhost = channel.remoteAddress match {
+        case address: InetSocketAddress => address.getAddress == InetAddress.getLoopbackAddress
+        case _ => false
+      }
+
+      if (!localhost && !useTls) {
+        val startTls = Request(Manager.ID, records = Seq(Record(1, Cluster(Str("STARTTLS"), Str(host)))))
+        val Str(cert) = Await.result(send(startTls), 10.seconds)(0)
+
+        var handler = makeSslContext(host).newHandler(channel.alloc(), host, port)
+        channel.pipeline.addFirst("sslHandler", handler)
+        Await.result(handler.handshakeFuture.toScala, 10.seconds)
+      }
+
       doLogin(password)
     } catch {
       case e: Throwable => close(e); throw e

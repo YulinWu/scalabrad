@@ -48,7 +48,7 @@ abstract class Server[S <: Server[S, _] : TypeTag, T <: ServerContext : TypeTag]
    */
   def start(host: String, port: Int, password: Array[Char], nameOpt: Option[String] = None): Unit = {
     val name = nameOpt.getOrElse(this.name)
-    _cxn = new ServerConnection(name, doc, host, port, password, packet => handleRequest(packet))
+    _cxn = new ServerConnection(name, doc, host, port, password, false, packet => handleRequest(packet))
     cxn.connect()
 
     // if the vm goes down or we lose the connection, shutdown
