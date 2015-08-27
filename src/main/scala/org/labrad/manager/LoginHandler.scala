@@ -8,6 +8,7 @@ import java.net.{InetAddress, InetSocketAddress}
 import java.nio.charset.StandardCharsets.UTF_8
 import java.nio.file.Files
 import org.labrad.ContextCodec
+import org.labrad.crypto.BigInts._
 import org.labrad.data._
 import org.labrad.errors._
 import org.labrad.types._
@@ -78,8 +79,17 @@ extends SimpleChannelInboundHandler[Packet] with Logging {
   // have upgraded with STARTTLS to a secure connection.
   private var secure: Boolean = tlsOnly
 
+  // challenge use for old-style password auth
   private val challenge = Array.ofDim[Byte](256)
   Random.nextBytes(challenge)
+
+  // state for secure remote password (SRP) auth
+  private var A: BigInt = _
+  private var B: BigInt = _
+  private var S: BigInt = _
+
+  // whether to use srp instead of old-style password auth
+  private var srp: Boolean = false
 
   private var handle: (ChannelHandlerContext, Packet) => Data =
     if (tlsOnly) handleLogin else handleStartTls
@@ -104,8 +114,18 @@ extends SimpleChannelInboundHandler[Packet] with Logging {
 
   private def handleLogin(ctx: ChannelHandlerContext, packet: Packet): Data = packet match {
     case Packet(req, 1, _, Seq()) if req > 0 =>
+      srp = false
       handle = handleChallengeResponse
       Bytes(challenge)
+
+    case Packet(req, 1, _, Seq(Record(0, Cluster(Str(ident), Bytes(aBytes))))) =>
+      A = fromUnsignedByteArray(aBytes)
+      val (salt, b, s) = auth.srpInit(ident, A)
+      B = b
+      S = s
+      srp = true
+      handle = handleChallengeResponse
+      Cluster(Bytes(salt), Bytes(B.toUnsignedByteArray))
 
     case Packet(req, 1, _, Seq(Record(2, Str("PING")))) =>
       Str("PONG")
@@ -116,9 +136,15 @@ extends SimpleChannelInboundHandler[Packet] with Logging {
 
   private def handleChallengeResponse(ctx: ChannelHandlerContext, packet: Packet): Data = packet match {
     case Packet(req, 1, _, Seq(Record(0, Bytes(response)))) if req > 0 =>
-      if (!auth.authenticate(challenge, response)) throw LabradException(2, "Incorrect password")
+      val data = if (srp) {
+        val M2 = auth.srpAuthenticate(A, B, S, response).getOrElse { throw LabradException(2, "Incorrect password") }
+        Cluster(Str("LabRAD 2.0"), Bytes(M2))
+      } else {
+        if (!auth.authenticate(challenge, response)) throw LabradException(2, "Incorrect password")
+        Str("LabRAD 2.0")
+      }
       handle = handleIdentification
-      Str("LabRAD 2.0")
+      data
     case _ =>
       throw LabradException(1, "Invalid authentication packet")
   }

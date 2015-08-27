@@ -7,9 +7,13 @@ import java.io.File
 import java.net.URI
 import java.nio.CharBuffer
 import java.nio.charset.StandardCharsets.UTF_8
-import java.security.MessageDigest
 import java.nio.file.Files
+import java.security.{MessageDigest, SecureRandom}
+import org.bouncycastle.crypto.agreement.srp._
+import org.bouncycastle.crypto.digests.SHA1Digest
 import org.labrad.annotations._
+import org.labrad.crypto.BigInts._
+import org.labrad.crypto.SRP
 import org.labrad.data._
 import org.labrad.errors._
 import org.labrad.registry._
@@ -23,6 +27,9 @@ import scala.concurrent.duration._
 
 trait AuthService {
   def authenticate(challenge: Array[Byte], response: Array[Byte]): Boolean
+
+  def srpInit(ident: String, A: BigInt): (Array[Byte], BigInt, BigInt)
+  def srpAuthenticate(A: BigInt, B: BigInt, S: BigInt, M1: Array[Byte]): Option[Array[Byte]]
 }
 
 class AuthServiceImpl(password: Array[Char]) extends AuthService {
@@ -34,6 +41,64 @@ class AuthServiceImpl(password: Array[Char]) extends AuthService {
     var same = expected.length == response.length
     for ((a, b) <- expected zip response) same = same & (a == b)
     same
+  }
+
+  private val passwordBytes = {
+    val charBuffer = CharBuffer.wrap(password)
+    val byteBuffer = UTF_8.encode(charBuffer)
+    val bytes = Array.ofDim[Byte](byteBuffer.remaining)
+    byteBuffer.get(bytes)
+    bytes
+  }
+
+  def srpInit(identity: String, A: BigInt): (Array[Byte], BigInt, BigInt) = {
+    val group = SRP.Group1024
+    require(A % group.getN != 0, "invalid client auth parameter")
+
+    val random = new SecureRandom()
+    val digest = new SHA1Digest()
+
+    val salt = Array.ofDim[Byte](32)
+    random.nextBytes(salt)
+
+    val verifier = new SRP6VerifierGenerator()
+    verifier.init(group, digest)
+    val v: BigInt = verifier.generateVerifier(
+      salt,
+      identity.getBytes(UTF_8),
+      passwordBytes)
+
+    val server = new SRP6Server()
+    server.init(group, v.bigInteger, digest, random)
+
+    val B = server.generateServerCredentials()
+    val S = server.calculateSecret(A.bigInteger)
+
+    (salt, B, S)
+  }
+
+  def srpAuthenticate(A: BigInt, B: BigInt, S: BigInt, M1: Array[Byte]): Option[Array[Byte]] = {
+    val digest = new SHA1Digest()
+
+    val s1 = A.toUnsignedByteArray ++ B.toUnsignedByteArray ++ S.toUnsignedByteArray
+    val M1expected = Array.ofDim[Byte](digest.getDigestSize)
+    digest.update(s1, 0, s1.length)
+    digest.doFinal(M1expected, 0)
+
+    // Check if M1 from client matches what we expect. Compares every
+    // byte and then reduces the result to ensure this is constant time.
+    val same = (M1 zip M1expected).map { case (a, b) => a == b }.reduce(_ && _)
+
+    if (!same) {
+      None
+    } else {
+      val s2 = A.toUnsignedByteArray ++ M1 ++ S.toUnsignedByteArray
+      val M2 = Array.ofDim[Byte](digest.getDigestSize)
+      digest.update(s2, 0, s2.length)
+      digest.doFinal(M2, 0)
+
+      Some(M2)
+    }
   }
 }
 
