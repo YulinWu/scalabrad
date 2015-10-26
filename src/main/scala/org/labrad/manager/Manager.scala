@@ -19,18 +19,79 @@ import org.labrad.errors._
 import org.labrad.registry._
 import org.labrad.util._
 import org.labrad.util.Paths._
+import org.mindrot.jbcrypt.BCrypt
 import scala.annotation.tailrec
+import scala.collection.mutable
 import scala.concurrent.Await
 import scala.concurrent.ExecutionContext.Implicits.global
 import scala.concurrent.duration._
 import scala.util.{Failure, Success, Try}
 
 
-trait AuthService {
-  def authenticate(challenge: Array[Byte], response: Array[Byte]): Boolean
+sealed trait User
+case object GlobalUser extends User
+case class NamedUser(name: String) extends User
+
+
+trait UserDb {
+  def addUser(username: String, password: String): Unit
+  def changePassword(username: String, oldPassword: String, newPassword: String): Unit
+  def checkUser(username: String, password: String): Boolean
+  def removeUser(username: String): Unit
 }
 
-class AuthServiceImpl(password: Array[Char]) extends AuthService {
+class UserDbImpl(store: RegistryStore) extends UserDb {
+  private val dir = {
+    var loc = store.root
+    loc = store.child(loc, "Servers", create = true)._1
+    loc = store.child(loc, "Manager", create = true)._1
+    loc = store.child(loc, "Users", create = true)._1
+    loc
+  }
+
+  def addUser(username: String, password: String): Unit = {
+    val (_, keys) = store.dir(dir)
+    if (keys.contains(username)) sys.error(s"username $username already exists")
+    val hashed = BCrypt.hashpw(password, BCrypt.gensalt())
+    store.setValue(dir, username, Str(hashed))
+  }
+
+  def changePassword(username: String, oldPassword: String, newPassword: String): Unit = {
+    val (_, keys) = store.dir(dir)
+    if (!keys.contains(username)) sys.error(s"username $username does not exist")
+    val oldHashed = store.getValue(dir, username, default = None).get[String]
+    if (!BCrypt.checkpw(oldPassword, oldHashed)) sys.error(s"incorrect password")
+    val newHashed = BCrypt.hashpw(newPassword, BCrypt.gensalt())
+    store.setValue(dir, username, Str(newHashed))
+  }
+
+  def checkUser(username: String, password: String): Boolean = {
+    val (_, keys) = store.dir(dir)
+    if (!keys.contains(username)) return false
+    val hashed = store.getValue(dir, username, default = None).get[String]
+    BCrypt.checkpw(password, hashed)
+  }
+
+  def removeUser(username: String): Unit = {
+    val (_, keys) = store.dir(dir)
+    if (keys.contains(username)) {
+      store.delete(dir, username)
+    }
+  }
+}
+
+
+trait AuthService {
+  def authenticate(challenge: Array[Byte], response: Array[Byte]): Boolean
+  def authenticateUser(username: String, password: String): Boolean
+
+  def addUser(username: String, password: String): Unit
+  def changePassword(username: String, oldPassword: String, newPassword: String): Unit
+  def checkUser(username: String, password: String): Boolean
+  def removeUser(username: String): Unit
+}
+
+class AuthServiceImpl(password: Array[Char], userDb: UserDb) extends AuthService {
   def authenticate(challenge: Array[Byte], response: Array[Byte]): Boolean = {
     val md = MessageDigest.getInstance("MD5")
     md.update(challenge)
@@ -40,11 +101,20 @@ class AuthServiceImpl(password: Array[Char]) extends AuthService {
     for ((a, b) <- expected zip response) same = same & (a == b)
     same
   }
+
+  def authenticateUser(username: String, response: String): Boolean = {
+    userDb.checkUser(username, response)
+  }
+
+  def addUser(username: String, password: String): Unit = userDb.addUser(username, password)
+  def changePassword(username: String, oldPassword: String, newPassword: String): Unit = userDb.changePassword(username, oldPassword, newPassword)
+  def checkUser(username: String, password: String): Boolean = userDb.checkUser(username, password)
+  def removeUser(username: String): Unit = userDb.removeUser(username)
 }
 
 
 class CentralNode(
-  password: Array[Char],
+  auth: AuthService,
   storeOpt: Option[RegistryStore],
   listeners: Seq[(Int, TlsPolicy)],
   tlsConfig: TlsHostConfig
@@ -53,7 +123,6 @@ class CentralNode(
   val tracker = new StatsTrackerImpl
   val hub: Hub = new HubImpl(tracker, () => messager)
   val messager: Messager = new MessagerImpl(hub, tracker)
-  val auth: AuthService = new AuthServiceImpl(password)
 
   // Manager gets id 1L
   tracker.connectServer(Manager.ID, Manager.NAME)
@@ -228,7 +297,10 @@ object Manager extends Logging {
       log.info(s"$host: sha1=${Certs.fingerprintSHA1(cert)}")
     }
 
-    val centralNode = new CentralNode(config.password, storeOpt, listeners, tlsHostConfig)
+    val userDb = new UserDbImpl(storeOpt.get)
+    val authService = new AuthServiceImpl(config.password, userDb)
+
+    val centralNode = new CentralNode(authService, storeOpt, listeners, tlsHostConfig)
 
     // Optionally wait for EOF to stop the manager.
     // This is a convenience feature when developing in sbt, allowing the

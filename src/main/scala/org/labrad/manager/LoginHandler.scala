@@ -106,6 +106,8 @@ extends SimpleChannelInboundHandler[Packet] with Logging {
   // or we have upgraded with STARTTLS to a secure connection.
   private var isSecure: Boolean = tlsPolicy == TlsPolicy.ON
 
+  private var user: User = GlobalUser
+
   private val challenge = Array.ofDim[Byte](256)
   Random.nextBytes(challenge)
 
@@ -147,6 +149,13 @@ extends SimpleChannelInboundHandler[Packet] with Logging {
     case Packet(req, 1, _, Seq(Record(2, Str("PING")))) =>
       Str("PONG")
 
+    case Packet(req, 1, _, Seq(Record(100, Cluster(Str(username), Str(password))))) =>
+      if (!(isSecure || isLocalConnection)) throw LabradException(100, "Username+password auth is only available with TLS")
+      if (!auth.authenticateUser(username, password)) throw LabradException(2, "Invalid username or password")
+      user = NamedUser(username)
+      handle = handleIdentification
+      Str("LabRAD 2.0")
+
     case _ =>
       throw LabradException(1, "Invalid login packet")
   }
@@ -156,6 +165,7 @@ extends SimpleChannelInboundHandler[Packet] with Logging {
       if (!auth.authenticate(challenge, response)) throw LabradException(2, "Incorrect password")
       handle = handleIdentification
       Str("LabRAD 2.0")
+
     case _ =>
       throw LabradException(1, "Invalid authentication packet")
   }
@@ -165,13 +175,13 @@ extends SimpleChannelInboundHandler[Packet] with Logging {
       val (handler, id) = data match {
         case Cluster(UInt(ver), Str(name)) =>
           val id = hub.allocateClientId(name)
-          val handler = new ClientHandler(hub, tracker, messager, ctx.channel, id, name)
+          val handler = new ClientHandler(auth, hub, tracker, messager, ctx.channel, id, name, user)
           hub.connectClient(id, name, handler)
           (handler, id)
 
         case Cluster(UInt(ver), Str(name), Str(doc)) =>
           val id = hub.allocateServerId(name)
-          val handler = new ServerHandler(hub, tracker, messager, ctx.channel, id, name, doc)
+          val handler = new ServerHandler(auth, hub, tracker, messager, ctx.channel, id, name, doc, user)
           hub.connectServer(id, name, handler)
           (handler, id)
 
@@ -179,7 +189,7 @@ extends SimpleChannelInboundHandler[Packet] with Logging {
         case Cluster(UInt(ver), Str(name), Str(docOrig), Str(notes)) =>
           val doc = if (notes.isEmpty) docOrig else (docOrig + "\n\n" + notes)
           val id = hub.allocateServerId(name)
-          val handler = new ServerHandler(hub, tracker, messager, ctx.channel, id, name, doc)
+          val handler = new ServerHandler(auth, hub, tracker, messager, ctx.channel, id, name, doc, user)
           hub.connectServer(id, name, handler)
           (handler, id)
 

@@ -30,8 +30,18 @@ trait ServerActor extends ClientActor {
   def close(): Unit
 }
 
-class ClientHandler(hub: Hub, tracker: StatsTracker, messager: Messager, channel: Channel, id: Long, name: String)(implicit ec: ExecutionContext)
-extends SimpleChannelInboundHandler[Packet] with ClientActor with ManagerSupport with Logging {
+class ClientHandler(
+    auth: AuthService,
+    hub: Hub,
+    tracker: StatsTracker,
+    messager: Messager,
+    channel: Channel,
+    id: Long,
+    name: String,
+    user: User
+)(implicit ec: ExecutionContext)
+extends SimpleChannelInboundHandler[Packet]
+with ClientActor with ManagerSupport with Logging {
 
   // handle incoming packets
   override def channelRead0(ctx: ChannelHandlerContext, packet: Packet): Unit = {
@@ -97,7 +107,7 @@ extends SimpleChannelInboundHandler[Packet] with ClientActor with ManagerSupport
   }
 
   // handle manager calls locally
-  protected val mgr = new ManagerImpl(id, name, hub, this, tracker, messager)
+  protected val mgr = new ManagerImpl(id, name, auth, hub, this, tracker, messager, user)
   private val mgrHandler = ManagerImpl.bind(mgr)
   private val mgrLock = new Object
 
@@ -125,8 +135,19 @@ extends SimpleChannelInboundHandler[Packet] with ClientActor with ManagerSupport
 }
 
 
-class ServerHandler(hub: Hub, tracker: StatsTracker, messager: Messager, channel: Channel, id: Long, name: String, doc: String)(implicit ec: ExecutionContext)
-extends ClientHandler(hub, tracker, messager, channel, id, name) with ServerActor with ManagerSupport with Logging {
+class ServerHandler(
+    auth: AuthService,
+    hub: Hub,
+    tracker: StatsTracker,
+    messager: Messager,
+    channel: Channel,
+    id: Long,
+    name: String,
+    doc: String,
+    user: User
+)(implicit ec: ExecutionContext)
+extends ClientHandler(auth, hub, tracker, messager, channel, id, name, user)
+with ServerActor with ManagerSupport with Logging {
 
   private val contexts = mutable.Set.empty[Context]
   private val promises = mutable.Map.empty[(Long, Int), Promise[Packet]]
@@ -286,7 +307,16 @@ trait ManagerSupport {
  * Implementation of manager settings (server id 1) that provide various
  * administrative information and functions to all connected clients and servers.
  */
-class ManagerImpl(id: Long, name: String, hub: Hub, stub: ManagerSupport, tracker: StatsTracker, messager: Messager) {
+class ManagerImpl(
+    id: Long,
+    name: String,
+    auth: AuthService,
+    hub: Hub,
+    stub: ManagerSupport,
+    tracker: StatsTracker,
+    messager: Messager,
+    user: User
+) {
   private def serverInfo(id: Either[Long, String]): ServerInfo = id match {
     case Left(Manager.ID) | Right(Manager.NAME) => ManagerImpl.info
     case _ =>
@@ -405,6 +435,39 @@ class ManagerImpl(id: Long, name: String, hub: Hub, stub: ManagerSupport, tracke
   def startServing(): Unit = {
     stub.startServing
     messager.broadcast(Manager.ConnectServer(id, name), sourceId = Manager.ID)
+  }
+
+  // user management
+
+  @Setting(id=150, name="user_add", doc="")
+  def userAdd(username: String, password: String): Unit = {
+    auth.addUser(username, password)
+  }
+
+  @Setting(id=151, name="user_change_password", doc="Change a user password")
+  def userChangePassword(oldPassword: String, newPassword: String, usernameOpt: Option[String] = None): Unit = {
+    // change password for the current user
+    val username = getUsername(usernameOpt).getOrElse {
+      sys.error("cannot change password for the global user")
+    }
+    auth.changePassword(username, oldPassword, newPassword)
+  }
+
+  @Setting(id=152, name="user_check_password", doc="Check the password for a user")
+  def userCheckPassword(password: String, usernameOpt: Option[String] = None): Boolean = {
+    val username = getUsername(usernameOpt).getOrElse {
+      sys.error("cannot check password for the global user")
+    }
+    auth.checkUser(username, password)
+  }
+
+  private def getUsername(usernameOpt: Option[String]): Option[String] = {
+    usernameOpt.orElse {
+      user match {
+        case GlobalUser => None
+        case NamedUser(name) => Some(name)
+      }
+    }
   }
 
   // utility methods (should stay local)

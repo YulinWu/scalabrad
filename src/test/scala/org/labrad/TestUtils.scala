@@ -6,7 +6,7 @@ import java.io.File
 import java.nio.ByteOrder
 import java.util.Date
 import org.labrad.data._
-import org.labrad.manager.{CentralNode, TlsHostConfig, TlsPolicy}
+import org.labrad.manager.{AuthServiceImpl, CentralNode, TlsHostConfig, TlsPolicy, UserDb}
 import org.labrad.registry._
 import org.labrad.types._
 import org.labrad.util.{Logging, Util}
@@ -19,6 +19,7 @@ case class ManagerInfo(
   host: String,
   port: Int,
   password: Array[Char],
+  users: Map[String, String],
   tlsPolicy: TlsPolicy,
   tlsHosts: TlsHostConfig
 )
@@ -32,6 +33,15 @@ object TestUtils extends {
     val port = 10000 + Random.nextInt(50000)
 
     val password = "testPassword12345!@#$%".toCharArray
+    val users = Map.empty[String, String]
+
+    val userDb = new UserDb {
+      def addUser(username: String, password: String): Unit = ???
+      def changePassword(username: String, oldPassword: String, newPassword: String): Unit = ???
+      def checkUser(username: String, password: String): Boolean = users.get(username) == Some(password)
+      def removeUser(username: String): Unit = ???
+    }
+    val authService = new AuthServiceImpl(password, userDb)
 
     val registryFile = File.createTempFile("labrad-registry", "")
 
@@ -42,9 +52,9 @@ object TestUtils extends {
     val tlsHosts = TlsHostConfig((ssc.certificate, sslCtx))
     val listeners = Seq(port -> tlsPolicy)
 
-    val manager = new CentralNode(password, Some(registryStore), listeners, tlsHosts)
+    val manager = new CentralNode(authService, Some(registryStore), listeners, tlsHosts)
     try {
-      f(ManagerInfo(host, port, password, tlsPolicy, tlsHosts))
+      f(ManagerInfo(host, port, password, users, tlsPolicy, tlsHosts))
     } finally {
       manager.stop()
     }

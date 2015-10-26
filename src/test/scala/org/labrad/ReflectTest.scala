@@ -368,7 +368,7 @@ class ReflectTests extends FunSuite with Logging {
       def serverInfo(id: Either[Long, String]): Option[ServerInfo] = None
     }
 
-    val inst = new ManagerImpl(1L, "Manager", hub, null, null, null)
+    val inst = new ManagerImpl(1L, "Manager", null, hub, null, null, null, null)
     val tpe = ru.typeOf[ManagerImpl]
     val method = tpe.member(ru.TermName("servers")).asMethod
     val getServers = cm.reflect(inst).reflectMethod(method)
